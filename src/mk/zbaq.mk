@@ -1,4 +1,15 @@
-.SHELLFLAGS = -ec
+# --
+# ## Make flags
+.SHELLFLAGS=-ec
+
+# --
+# We ensure that the `REQUIRES_BIN` list of tools is available on the system,
+# otherwise we'll return an error.
+REQUIRES_BIN=find readlink wc env truncate awk xargs
+ifneq ($(REQUIRES_BIN),$(foreach T,$(REQUIRES_BIN),$(if $(shell which $T 2> /dev/null),$T,$(info ERR Missing tool $T))))
+$(error FTL Some required tools are missing)
+endif
+
 
 ZBAQ_MAKEFILE=$(shell readlink -f $(lastword $(MAKEFILE_LIST)))
 ZBAQ_PATH?=$(shell readlink -f $(dir $(lastword $(MAKEFILE_LIST))))
@@ -9,21 +20,58 @@ ZBAQ_PATH?=$(shell readlink -f $(dir $(lastword $(MAKEFILE_LIST))))
 # list of files as arguments.
 ZBAQ_BATCH_SIZE?=10000
 
-ZBAQ_INDEX_PATH:=$(ZBAQ_PATH)/index.zpaq
-ZBAQ_CONTENT_PATH:=$(ZBAQ_PATH)/content-???.zpaq
+# --
+# `ZBAQ_INDEX_PATH` is where the index file is stored. The index is used to keep
+# track of what is in the content, so that the content files can be moved/archived
+# at will.
+ZBAQ_INDEX_PATH?=$(ZBAQ_PATH)/index.zpaq
+ZBAQ_CONTENT_PATH?=$(ZBAQ_PATH)/content-???.zpaq
+ZBAQ_CONFIG_PATH?=$(ZBAQ_PATH)/config.mk
 
+# --
+# ## Ignored files
+#
+# You probably don't want to backup everything, and the `DEFAULT_IGNORED`
+# list of globs will make sure the directories or files matching these
+# are going to e skipped.
 GITIGNORE_PATH?=$(HOME)/.gitignore
-DEFAULT_IGNORED?=.deps/run
-GIT_IGNORED?=$(file <$(GITIGNORE_PATH))
-IGNORED+=$(foreach P,$(GIT_IGNORED) $(DEFAULT_IGNORED),$P)
+GITIGNORE_PATTERNS?=$(filter %,$(filter-out #%,$(file <$(GITIGNORE_PATH))))
 
-ifneq ($(wildcard $(ZBAQ_PATH)/config.mk),)
-include $(ZBAQ_PATH)/config.mk
+# --
+# The `DEFAULT_IGNORED` are patterns that are ignored by default, which can
+# be overriden in the config.
+DEFAULT_IGNORED?=.deps/run
+
+# --
+# The `IGNORED` variable contains the list of all ignored patterns. This will
+# be used to define the arguments to
+IGNORED+=$(foreach P,$(GITIGNORE_PATTERNS) $(DEFAULT_IGNORED),$P)
+
+# --
+# We make sure that `zpaq` is available
+ifeq ($(ZPAQ),)
+ZPAQ:=$(shell which zpaq 2> /dev/null)
+ifeq ($(ZPAQ),)
+$(error ERR Can't find 'zpaq' command, install it or set the ZPAQ variable)
+endif
 else
-$(error ERR Can't find $(ZBAQ_PATH)/config.mk)
+ifeq ($(shell which zpaq 2> /dev/null),)
+$(error ERR Can't find zpaq at '$(ZPAQ)' install it or set the ZPAQ variable)
+endif
 endif
 
-FIND_IGNORED:=$(foreach P,$(IGNORED),$(if $(findstring /,$P),-a -not -path '$P' -a -not -path '*/$P/*',-a -not -name '$P'))
+# --
+#  The `config.mk` file is where the configu
+
+ifneq ($(wildcard $(ZBAQ_CONFIG_PATH)),)
+include $(ZBAQ_PATH)/config.mk
+else
+$(error ERR Can't find $(ZBAQ_CONFIG_PATH))
+endif
+
+# --
+# We convert ignored patterns into `find` arguments
+FIND_IGNORED:=$(foreach P,$(IGNORED),-a -not -path '*/$P/*')
 
 # FROM: <https://stackoverflow.com/questions/12340846/bash-shell-script-to-find-the-closest-parent-directory-of-several-files>
 cmd-common-path=printf "%s\n%s\n" $1 | sed -e 'N;s/^\(.*\).*\n\1.*$$/\1/'  | sed 's/\(.*\)\/.*/\1/'
@@ -31,13 +79,12 @@ cmd-common-path=printf "%s\n%s\n" $1 | sed -e 'N;s/^\(.*\).*\n\1.*$$/\1/'  | sed
 BACKUP_SOURCES:=$(shell echo $(foreach P,$(PATHS),$$(readlink -f $P)))
 BACKUP_ROOT:=$(shell $(call cmd-common-path,$(BACKUP_SOURCES)))
 
-ZPAQ=zpaq
-FD=fd
 
 # --
 # `make info` displays overall information about the
 info:
 	@
+	echo "ZPaq:     $(ZPAQ)"
 	echo "Package:  $(ZBAQ_PATH)"
 	echo "Root:     $(BACKUP_ROOT)"
 	echo "Sources:  $(BACKUP_SOURCES)"
@@ -52,7 +99,7 @@ info:
 
 
 manifest: $(ZBAQ_PATH)/manifest.lst
-	@echo find "$(ZBAQ_PATH)" -maxdepth 1 -name 'manifest-*.lst' -exec cat {} ';'
+	@find "$(ZBAQ_PATH)" -maxdepth 1 -name 'manifest-*.lst' -exec cat {} ';'
 
 clean-manifest: .FORCE
 	@
@@ -62,13 +109,29 @@ clean-manifest: .FORCE
 		rm $(ZBAQ_PATH)/manifest-*.lst
 	fi
 
+backup: $(ZBAQ_PATH)/manifest.lst
+	@
+	if [ ! -d "$(BACKUP_ROOT)" ]; then
+		echo "ERR Could not find root directory: $(BACKUP_ROOT)"
+	fi
+	TEMP=$$(mktemp)
+	for MANIFEST in $$(cat $<); do
+		echo $$(MANIFEST)
+		# cp $(ZBAQ_PATH)/$$MANIFEST $$TEMP
+		# echo "-index $(ZBAQ_INDEX_PATH)" >> $$TEMP
+		# cat $$TEMP |  xargs env -C $(BACKUP_ROOT) $(ZPAQ) add $(ZBAQ_CONTENT_PATH)
+	done
+	unlink "$$TEMP"
+
+# --
+# ## Internal Functions
+
 $(ZBAQ_PATH)/manifest.lst: clean-manifest .FORCE
-	echo $(BACKUP_SOURCES)
+	@
 	# We create catalogue of all the files we need to manage using `fd`
 	TEMP="$$(mktemp)"
 	for SRC in $(BACKUP_SOURCES); do
-		echo env -C "$(BACKUP_ROOT)" find "$$SRC" -type f -or -type d $(FIND_IGNORED) >> "$$TEMP"
-		env -C "$(BACKUP_ROOT)" find "$$SRC" -type f -or -type d $(FIND_IGNORED) >> "$$TEMP"
+		env -C "$(BACKUP_ROOT)" find "$$SRC" '(' -type f -or -type l ')' $(FIND_IGNORED) >> "$$TEMP"
 	done
 	truncate --size 0 "$@"
 	# And now we split the TEMP file into chunks of ZBAQ_BATCH_SIZE lines.
@@ -77,18 +140,11 @@ $(ZBAQ_PATH)/manifest.lst: clean-manifest .FORCE
 	unlink "$$TEMP"
 
 
-all:
-	@echo $(ZBAQ_PATH) $(BASE) $(PATHS)
-	ROOT="$$($(call cmd-common-path,$(PATHS)))"
-	if [ ! -d "$$ROOT" ]; then
-		echo "ERR Could not find root directory: $$ROOT"
-	fi
-	echo env -C "$$ROOT" $(ZPAQ) add $(ZBAQ_CONTENT_PATH) -index $(ZBAQ_INDEX_PATH)
 
-ZBAQ_CONTENT_PATH:=$(ZBAQ_PATH)/content-???.zpaq
-backup:
-
-.PHONY: all backup clean-manifest
+# --
+# ## Make functions
+#
+.PHONY: info manifest clean-manifest
 
 print-%: .FORCE
 	$(info $* =$(value $*))
