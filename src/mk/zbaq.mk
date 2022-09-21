@@ -18,7 +18,7 @@ ZBAQ_PATH?=$(shell readlink -f $(dir $(lastword $(MAKEFILE_LIST))))
 # `ZBAQ_BATCH_SIZE` defines the number of elements that come into a manifest batch.
 # This is used to workaround shell limit of arguments, as we need to pass to zpaq the
 # list of files as arguments.
-ZBAQ_BATCH_SIZE?=10000
+ZBAQ_BATCH_SIZE?=100000
 
 # --
 # `ZBAQ_INDEX_PATH` is where the index file is stored. The index is used to keep
@@ -27,6 +27,7 @@ ZBAQ_BATCH_SIZE?=10000
 ZBAQ_INDEX_PATH?=$(ZBAQ_PATH)/index.zpaq
 ZBAQ_CONTENT_PATH?=$(ZBAQ_PATH)/content-???.zpaq
 ZBAQ_CONFIG_PATH?=$(ZBAQ_PATH)/config.mk
+ZBAQ_MANIFEST_PATH?=$(ZBAQ_PATH)/manifest.lst
 
 # --
 # ## Ignored files
@@ -40,7 +41,7 @@ GITIGNORE_PATTERNS?=$(filter %,$(filter-out #%,$(file <$(GITIGNORE_PATH))))
 # --
 # The `DEFAULT_IGNORED` are patterns that are ignored by default, which can
 # be overriden in the config.
-DEFAULT_IGNORED?=.deps/run
+DEFAULT_IGNORED?=*.zbaq *.zpaq
 
 # --
 # The `IGNORED` variable contains the list of all ignored patterns. This will
@@ -89,17 +90,16 @@ info:
 	echo "Root:     $(BACKUP_ROOT)"
 	echo "Sources:  $(BACKUP_SOURCES)"
 	echo "Ignored:  $(foreach P,$(IGNORED),$P)"
-	if [ ! -z "$$(find "$(ZBAQ_PATH)" -maxdepth 1 -name 'manifest-*.lst' -printf 1 -quit)" ]; then
-		echo "Manifest: $(ZBAQ_PATH)/manifest.lst"
-		echo "Batches: " $(ZBAQ_PATH)/manifest-*.lst
-		echo "Files:    $$(wc -l $(ZBAQ_PATH)/manifest-*.lst | tail -n1 | awk '{print $$1}')"
+	if [ -e "$(ZBAQ_MANIFEST_PATH)" ]; then
+		echo "Manifest: $(ZBAQ_MANIFEST_PATH) $$(wc -l "$(ZBAQ_MANIFEST_PATH)")"
 	else
 		echo "Manifest: ??? → run 'make -f $$(realpath --relative-to=$$(pwd) $(ZBAQ_MAKEFILE)) manifest' to produce it"
 	fi
+	echo "Content:  $(ZBAQ_CONTENT_PATH) → $(wildcard $(ZBAQ_CONTENT_PATH))"
 
 
-manifest: $(ZBAQ_PATH)/manifest.lst
-	@find "$(ZBAQ_PATH)" -maxdepth 1 -name 'manifest-*.lst' -exec cat {} ';'
+manifest: $(ZBAQ_MANIFEST_PATH)
+	@cat $<
 
 clean-manifest: .FORCE
 	@
@@ -114,32 +114,49 @@ backup: $(ZBAQ_PATH)/manifest.lst
 	if [ ! -d "$(BACKUP_ROOT)" ]; then
 		echo "ERR Could not find root directory: $(BACKUP_ROOT)"
 	fi
-	TEMP=$$(mktemp)
-	for MANIFEST in $$(cat $<); do
-		echo $$(MANIFEST)
-		# cp $(ZBAQ_PATH)/$$MANIFEST $$TEMP
-		# echo "-index $(ZBAQ_INDEX_PATH)" >> $$TEMP
-		# cat $$TEMP |  xargs env -C $(BACKUP_ROOT) $(ZPAQ) add $(ZBAQ_CONTENT_PATH)
+	BACKUP_TEMP=$$(mktemp -d)
+	ZPAQ_ERRORS=$$(mktemp)
+	# We quote every file in the list so that it's shell-safe
+	sed "s|'|\\\'|;s|^|'|;s|$$|'|" < "$<" > "$$BACKUP_TEMP/zpaq-args.lst"
+	# We split the manifest in batches, which is used to work around the
+	# limit of arguments.
+	env -C "$$BACKUP_TEMP" split -d --lines=$(ZBAQ_BATCH_SIZE) --additional-suffix=.lst "zpaq-args.lst" zpaq-args-
+	for CHUNK in $$BACKUP_TEMP/zpaq-args-*.lst; do
+		# This is a bit horrendous, but we need to create a script that passes
+		# the list of files explicitly as arguments to `zpaq`, because it
+		# doesn't support a list of files given by a file, and the options
+		# like `-index` need to come after the files to include.
+		echo -n 'env -C "$(BACKUP_ROOT)" $(ZPAQ) add '"'"'$(ZBAQ_CONTENT_PATH)'"'"' ' > "$$CHUNK.sh"
+		tr '\n' ' ' < "$$CHUNK" >> "$$CHUNK.sh"
+		echo -n '-index "$(ZBAQ_INDEX_PATH)"' >> "$$CHUNK.sh"
+		# echo "$$CHUNK.sh"
+		chmod +x "$$CHUNK.sh"
+		. "$$CHUNK.sh"
+		# bash "$$CHUNK.sh"
+		# echo env -C $(BACKUP_ROOT) $(ZPAQ) add $(ZBAQ_CONTENT_PATH) $$(cat "$$ARGS") '-index "$(ZBAQ_INDEX_PATH)"'
+		# pushd  $(BACKUP_ROOT)
+		# $(ZPAQ) add $(ZBAQ_CONTENT_PATH) $$(cat "$$ARGS") '-index "$(ZBAQ_INDEX_PATH)"'
+		# popd
 	done
-	unlink "$$TEMP"
+	rm -rf "$$BACKUP_TEMP"
+	# Unfortunately, zpaq requires the index at the end, so we need to copy the file
+	# echo '-index "$(ZBAQ_INDEX_PATH)"' >> "$$ZPAQ_ARGS"
+	# xargs -n$(ZBAQ_BATCH_SIZE) echo ">>>" env -C $(BACKUP_ROOT) $(ZPAQ) add $(ZBAQ_CONTENT_PATH) < "$$ZPAQ_ARGS"
+	# # xargs -n$(ZBAQ_BATCH_SIZE) env -C $(BACKUP_ROOT) $(ZPAQ) add $(ZBAQ_CONTENT_PATH) < "$$TEMP"  2> "$$ZPAQ_ERRORS"
+	# unlink "$$ZPAQ_ARGS"
+	# cat "$$ZPAQ_ERRORS"
+	# unlink "$$ZPAQ_ERRORS"
 
 # --
 # ## Internal Functions
 
-$(ZBAQ_PATH)/manifest.lst: clean-manifest .FORCE
+$(ZBAQ_MANIFEST_PATH): clean-manifest .FORCE
 	@
 	# We create catalogue of all the files we need to manage using `fd`
-	TEMP="$$(mktemp)"
-	for SRC in $(BACKUP_SOURCES); do
-		env -C "$(BACKUP_ROOT)" find "$$SRC" '(' -type f -or -type l ')' $(FIND_IGNORED) >> "$$TEMP"
-	done
 	truncate --size 0 "$@"
-	# And now we split the TEMP file into chunks of ZBAQ_BATCH_SIZE lines.
-	env -C $(ZBAQ_PATH) split -l$(ZBAQ_BATCH_SIZE) -d --additional-suffix .lst --verbose "$$TEMP"  manifest- | grep "'" | cut -d "'" -f2 >> $@
-	# We cleanup the temp file
-	unlink "$$TEMP"
-
-
+	for SRC in $(BACKUP_SOURCES); do
+		env -C "$(BACKUP_ROOT)" find "$$SRC" '(' -type f -or -type l ')' $(FIND_IGNORED) >> "$@"
+	done
 
 # --
 # ## Make functions
