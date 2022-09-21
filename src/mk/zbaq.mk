@@ -1,6 +1,7 @@
 # --
 # ## Make flags
 .SHELLFLAGS=-ec
+SPACE:=$(eval) $(eval)
 
 # --
 # We ensure that the `REQUIRES_BIN` list of tools is available on the system,
@@ -12,6 +13,7 @@ endif
 
 ZBAQ_MAKEFILE=$(shell readlink -f $(lastword $(MAKEFILE_LIST)))
 ZBAQ_PATH?=$(shell readlink -f $(dir $(lastword $(MAKEFILE_LIST))))
+ZBAQ_NAME?=$(firstword $(subst .,$(SPACE),$(notdir $(ZBAQ_PATH))))
 
 # --
 # `ZBAQ_BATCH_SIZE` defines the number of elements that come into a manifest batch.
@@ -60,7 +62,7 @@ $(error ERR Can't find zpaq at '$(ZPAQ)' install it or set the ZPAQ variable)
 endif
 endif
 
-REMOTE_PROTOCOL=$(REMOTE_URL)
+
 # --
 #  The `config.mk` file is where the configu
 
@@ -81,6 +83,8 @@ cmd-make=make -f $$(realpath --relative-to=$$(pwd) $(ZBAQ_MAKEFILE)) $1
 BACKUP_SOURCES:=$(shell echo $(foreach P,$(PATHS),$$(readlink -f $P)))
 BACKUP_ROOT:=$(shell $(call cmd-common-path,$(BACKUP_SOURCES)))
 
+REMOTE_PROTOCOL:=$(if $(findstring ://,$(REMOTE_URL)),$(firstword $(subst ://,$(SPACE),$(REMOTE_URL))),file)
+REMOTE_PATH:=$(if $(findstring ://,$(REMOVE_ULR)),$(subst $(REMOTE_PROTOCOL)://,,$(REMOTE_URL)),$(REMOTE_URL))
 
 # --
 # `make info` displays overall information about the
@@ -149,7 +153,59 @@ list:
 		$(ZPAQ) list "$(ZBAQ_INDEX_PATH)"
 	fi
 
+local:
+	@du -hsc $(ZBAQ_PATH)/*
+
+remote:
+	@
+	case "$(REMOTE_PROTOCOL)" in
+		file)
+			if [ ! -d "$(REMOTE_PATH)" ]; then
+				echo "No remote path found '$(REMOTE_PATH)"
+			else
+				du -hsc $(REMOTE_PATH)/$(notdir $(ZBAQ_CONTENT_PATH))
+			fi
+			;;
+		*)
+			echo "ERR: Unsupported protocol $(REMOTE_PROTOCOL) in $(REMOTE_URL)"
+			exit 1
+			;;
+	esac
+
+
+
 flush:
+	@
+	case "$(REMOTE_PROTOCOL)" in
+		file)
+			if [ ! -d "$(REMOTE_PATH)" ]; then
+				if ! mkdir -p "$(REMOTE_PATH)"; then
+					echo "ERR: Could not create $(REMOTE_PATH) in $(REMOTE_URL)"
+					exit 1
+				fi
+			fi
+			;;
+		*)
+			echo "ERR: Unsupported protocol $(REMOTE_PROTOCOL) in $(REMOTE_URL)"
+			exit 1
+			;;
+	esac
+
+	for CONTENT in $(ZBAQ_CONTENT_PATH); do
+		CONTENT_NAME=$$(basename "$$CONTENT")
+		case "$(REMOTE_PROTOCOL)" in
+			file)
+				TARGET="$(REMOTE_PATH)/$$CONTENT_NAME"
+				if [ -e "$$TARGET" ]; then
+					echo "ERR: An archive already exists at "$$TARGET", aborting."
+					exit 1
+				else
+					echo "flush: Moving $$CONTENT to $$TARGET"
+					mv $$CONTENT $$TARGET
+				fi
+				;;
+		esac
+	done
 
 # --
 # ## Internal Functions
