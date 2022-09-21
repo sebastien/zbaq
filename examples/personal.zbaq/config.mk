@@ -5,9 +5,9 @@
 # backup.
 PATHS=\
 	~/.ssh \
-	~/Workspace
+	~/Workspace/*--main
 
 # You can define a REMOTE_URL
-REMOTE_URL=ssh://$(USER)@nas.local:/data/backups/$(ZBAQ_NAME)
+REMOTE_URL=file://$(USER)@nas.local:/data/backups/$(ZBAQ_NAME)
 
 # EOF
