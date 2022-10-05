@@ -86,13 +86,44 @@ BACKUP_ROOT:=$(shell $(call cmd-common-path,$(BACKUP_SOURCES)))
 REMOTE_PROTOCOL:=$(if $(findstring ://,$(REMOTE_URL)),$(firstword $(subst ://,$(SPACE),$(REMOTE_URL))),file)
 REMOTE_PATH:=$(if $(findstring ://,$(REMOVE_ULR)),$(subst $(REMOTE_PROTOCOL)://,,$(REMOTE_URL)),$(REMOTE_URL))
 
+.PHONY: help
+help:
+	@
+	echo ' ______     ______     ______     ______    '
+	echo '/\___  \   /\  == \   /\  __ \   /\  __ \   '
+	echo '\/_/  /__  \ \  __<   \ \  __ \  \ \ \/\_\  '
+	echo '  /\_____\  \ \_____\  \ \_\ \_\  \ \___\_\ '
+	echo '  \/_____/   \/_____/   \/_/\/_/   \/___/_/ '
+	echo
+	echo "Zbaq is an incremental local or remote backup tool that uses 'zpaq' and 'make'"
+	echo "to easily and seamlessly backup your data"
+	echo
+	echo "Backing up '$(BACKUP_SOURCES)' to '$(REMOTE_URL)'"
+	echo ''
+	echo 'Basic operations:'
+	echo '- zbaq backup:   Back ups new files'
+	echo '- zbaq list:     List previous backups'
+	echo '- zbaq edit:     Opens $$EDITOR to edit the config'
+	echo ''
+	echo 'Checking status:'
+	echo '- zbaq info:     Show information about the config'
+	echo '- zbaq manifest: Shows what has been backed up'
+	echo '- zbaq list:     List previous backups'
+	echo ''
+	echo 'Managing local/remote storage'
+	echo '- zbaq local:    List locally stored backups'
+	echo '- zbaq remote:   List remotely stored backups'
+	echo '- zbaq flush:    Moves local backups to the remote store'
+
 # --
 # `make info` displays overall information about the
+.PHONY: info
 info:
 	@
 	echo "ZPaq:     $(ZPAQ)"
 	echo "Package:  $(ZBAQ_PATH)"
 	echo "Root:     $(BACKUP_ROOT)"
+	echo "Remote:   $(REMOTE_URL)"
 	echo "Sources:  $(BACKUP_SOURCES)"
 	echo "Ignored:  $(foreach P,$(IGNORED),$P)"
 	if [ -e "$(ZBAQ_MANIFEST_PATH)" ]; then
@@ -102,10 +133,15 @@ info:
 	fi
 	echo "Content:  $(ZBAQ_CONTENT_PATH) → $(wildcard $(ZBAQ_CONTENT_PATH))"
 
+.PHONY: edit
+edit:
+	env -C "$(ZBAQ_PATH)" $(if $(EDITOR),$(EDITOR),vi) $(realpath $(ZBAQ_PATH)/Makefile)
 
+.PHONY: manifest
 manifest: $(ZBAQ_MANIFEST_PATH)
 	@cat $<
 
+.PHONY: clean-manifest
 clean-manifest: .FORCE
 	@
 	# We clean any previously created manifest file
@@ -114,6 +150,7 @@ clean-manifest: .FORCE
 		rm $(ZBAQ_PATH)/manifest-*.lst
 	fi
 
+.PHONY: backup
 backup: $(ZBAQ_PATH)/manifest.lst
 	@
 	if [ ! -d "$(BACKUP_ROOT)" ]; then
@@ -145,6 +182,7 @@ backup: $(ZBAQ_PATH)/manifest.lst
 	echo "[backup/errors] END"
 	unlink "$$ERRORS"
 
+.PHONY: list
 list:
 	@
 	if [ ! -e "$(ZBAQ_INDEX_PATH)" ]; then
@@ -153,17 +191,29 @@ list:
 		$(ZPAQ) list "$(ZBAQ_INDEX_PATH)"
 	fi
 
+.PHONY: local
 local:
 	@du -hsc $(ZBAQ_PATH)/*
 
-remote:
+
+.PHONY: remote
+remote: check-remote
+	@
+	case "$(REMOTE_PROTOCOL)" in
+		file)
+			du -hsc $(REMOTE_PATH)/$(notdir $(ZBAQ_CONTENT_PATH))
+		*)
+		;;
+	esac
+
+.PHONY: check-remote
+check-remote:
 	@
 	case "$(REMOTE_PROTOCOL)" in
 		file)
 			if [ ! -d "$(REMOTE_PATH)" ]; then
 				echo "No remote path found '$(REMOTE_PATH)"
-			else
-				du -hsc $(REMOTE_PATH)/$(notdir $(ZBAQ_CONTENT_PATH))
+				exit 1
 			fi
 			;;
 		*)
@@ -173,8 +223,8 @@ remote:
 	esac
 
 
-
-flush:
+.PHONY: flush
+flush: check-remote
 	@
 	case "$(REMOTE_PROTOCOL)" in
 		file)
