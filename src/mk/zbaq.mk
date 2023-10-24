@@ -44,6 +44,8 @@ GITIGNORE_PATTERNS?=$(filter %,$(filter-out #%,$(file <$(GITIGNORE_PATH))))
 # be overriden in the config.
 DEFAULT_IGNORED?=*.zbaq *.zpaq
 
+TMPDIR?=$(if $(HOME),$(HOME),/tmp)
+
 # --
 # The `IGNORED` variable contains the list of all ignored patterns. This will
 # be used to define the arguments to
@@ -64,7 +66,7 @@ endif
 
 
 # --
-#  The `config.mk` file is where the configu
+#  The `config.mk` file is where the confige
 
 ifneq ($(wildcard $(ZBAQ_CONFIG_PATH)),)
 include $(ZBAQ_PATH)/config.mk
@@ -81,7 +83,10 @@ cmd-common-path=printf "%s\n%s\n" $1 | sed -e 'N;s/^\(.*\).*\n\1.*$$/\1/'  | sed
 cmd-make=make -f $$(realpath --relative-to=$$(pwd) $(ZBAQ_MAKEFILE)) $1
 
 BACKUP_SOURCES:=$(shell echo $(foreach P,$(PATHS),$$(readlink -f $P)))
-BACKUP_ROOT:=$(shell $(call cmd-common-path,$(BACKUP_SOURCES)))
+BACKUP_ROOT:=$(if $(filter 1,$(words $(BACKUP_SOURCES))),$(BACKUP_SOURCES),$(shell $(call cmd-common-path,$(BACKUP_SOURCES))))
+ifeq ($(BACKUP_ROOT),)
+	$(error ERR !!! Missing BACKUP_SOURCES in config.mk)
+endif
 
 REMOTE_PROTOCOL:=$(if $(findstring ://,$(REMOTE_URL)),$(firstword $(subst ://,$(SPACE),$(REMOTE_URL))),file)
 REMOTE_PATH:=$(if $(findstring ://,$(REMOVE_ULR)),$(subst $(REMOTE_PROTOCOL)://,,$(REMOTE_URL)),$(REMOTE_URL))
@@ -156,8 +161,15 @@ backup: $(ZBAQ_PATH)/manifest.lst
 	if [ ! -d "$(BACKUP_ROOT)" ]; then
 		echo "ERR Could not find root directory: $(BACKUP_ROOT)"
 	fi
-	BACKUP_TEMP=$$(mktemp -d)
-	ERRORS=$$(mktemp)
+	BACKUP_TEMP=$$(mktemp -p "$(TMPDIR)" -d zbaq-backup-XXX )
+	if [ ! -e "$$BACKUP_TEMP" ]; then
+		mkdir -p "$$BACKUP_TEMP"
+	fi
+	ERRORS=$${BACKUP_TEMP}.log
+	if [ ! -e "$$BACKUP_TEMP" ]; then
+		echo "ERR Could not got to temp directory: $$BACKUP_TEMP"
+		exit 1
+	fi
 	# We quote every file in the list so that it's shell-safe
 	sed "s|'|\\\'|;s|^|'|;s|$$|'|" < "$<" > "$$BACKUP_TEMP/zpaq-args.lst"
 	# We split the manifest in batches, which is used to work around the
@@ -201,7 +213,12 @@ remote: check-remote
 	@
 	case "$(REMOTE_PROTOCOL)" in
 		file)
-			du -hsc $(REMOTE_PATH)/$(notdir $(ZBAQ_CONTENT_PATH))
+			if [ -z "$$(ls $(REMOTE_PATH)/$(notdir $(ZBAQ_CONTENT_PATH)) 2> /dev/null)" ]; then
+				echo "No archive found at remote path: '$(REMOTE_PATH)'"
+			else
+				du -hsc "$(REMOTE_PATH)/$(notdir $(ZBAQ_CONTENT_PATH))"
+			fi
+		;;
 		*)
 		;;
 	esac
@@ -212,7 +229,7 @@ check-remote:
 	case "$(REMOTE_PROTOCOL)" in
 		file)
 			if [ ! -d "$(REMOTE_PATH)" ]; then
-				echo "No remote path found '$(REMOTE_PATH)"
+				echo "No remote path found $(REMOTE_PATH)"
 				exit 1
 			fi
 			;;
@@ -264,8 +281,17 @@ $(ZBAQ_MANIFEST_PATH): clean-manifest .FORCE
 	@
 	# We create catalogue of all the files we need to manage using `fd`
 	truncate --size 0 "$@"
+
+	if [ ! -e "$(BACKUP_ROOT)" ]; then
+		echo "ERR !!! Backup root does not exist: '$(BACKUP_ROOT)'"
+		exit 1
+	fi
 	for SRC in $(BACKUP_SOURCES); do
-		env -C "$(BACKUP_ROOT)" find "$$SRC" '(' -type f -or -type l ')' $(FIND_IGNORED) -exec realpath --relative-base="$(BACKUP_ROOT)" '{}' ';' >> "$@"
+		if [ ! -e "$$SRC" ]; then
+			echo "WRN -!- Source does not exist: $$SRC"
+		else
+			env -C "$(BACKUP_ROOT)" find "$$SRC" '(' -type f -or -type l ')' $(FIND_IGNORED) -exec realpath --relative-base="$(BACKUP_ROOT)" '{}' ';' >> "$@"
+		fi
 	done
 
 # --
@@ -278,7 +304,7 @@ print-%: .FORCE
 	$(info $*:=$($*))
 
 .ONESHELL:
-	@$()
+	@
 
 .FORCE:
 
