@@ -1,7 +1,129 @@
+#  --
+#  ```
+#  ______     ______     ______     ______
+# /\___  \   /\  == \   /\  __ \   /\  __ \
+# \/_/  /__  \ \  __<   \ \  __ \  \ \ \/\_\
+#   /\_____\  \ \_____\  \ \_\ \_\  \ \___\_\
+#   \/_____/   \/_____/   \/_/\/_/   \/___/_/
+#
+# ```
+#
+# ZBaq is a backup system based on `make` and using `zpaq` as the archival
+# format.
+
+
 # --
-# ## Make flags
-.SHELLFLAGS=-ec
-SPACE:=$(eval) $(eval)
+# ## Configuration
+
+# --
+# `BACKUP_ROOT` defines the common root of all paths. It's optional, and will
+# remove the root from all backed up paths;
+BACKUP_ROOT?=
+# --
+# `BACKUP_PATHS` defines the list of paths to be backed up.
+BACKUP_PATHS?=
+# --
+# `BACKUP_EXCLUDE` defines the list of glob patterns for files and dir
+# basnames to be excluded.
+BACKUP_EXCLUDE?=
+# --
+# `BACKUP_STATE` defines where the backup state is stored.
+BACKUP_STATE?=
+# --
+# `BACKUP_DESTINATION` defines where the backup is to be stored (as a
+# destination).
+BACKUP_DESTINATION?=
+
+# =============================================================================
+# COLORS
+# =============================================================================
+
+# We respect https://no-color.org/
+NO_COLOR?=
+NO_INTERACTIVE?=
+TERM?=
+YELLOW        ?=
+ORANGE        ?=
+GREEN         ?=
+GOLD          ?=
+GOLD_DK       ?=
+BLUE_DK       ?=
+BLUE          ?=
+BLUE_LT       ?=
+CYAN          ?=
+RED           ?=
+PURPLE_DK     ?=
+PURPLE        ?=
+PURPLE_LT     ?=
+GRAY          ?=
+GRAYLT        ?=
+REGULAR       ?=
+RESET         ?=
+BOLD          ?=
+UNDERLINE     ?=
+REV           ?=
+DIM           ?=
+ifneq (,$(shell which tput 2> /dev/null))
+ifeq (,$(NO_COLOR))
+TERM?=xterm-color
+BLUE_DK       :=$(shell TERM="$(TERM)" echo $$(tput setaf 27))
+BLUE          :=$(shell TERM="$(TERM)" echo $$(tput setaf 33))
+BLUE_LT       :=$(shell TERM="$(TERM)" echo $$(tput setaf 117))
+YELLOW        :=$(shell TERM="$(TERM)" echo $$(tput setaf 226))
+ORANGE        :=$(shell TERM="$(TERM)" echo $$(tput setaf 208))
+GREEN         :=$(shell TERM="$(TERM)" echo $$(tput setaf 118))
+GOLD          :=$(shell TERM="$(TERM)" echo $$(tput setaf 214))
+GOLD_DK       :=$(shell TERM="$(TERM)" echo $$(tput setaf 208))
+CYAN          :=$(shell TERM="$(TERM)" echo $$(tput setaf 51))
+RED           :=$(shell TERM="$(TERM)" echo $$(tput setaf 196))
+PURPLE_DK     :=$(shell TERM="$(TERM)" echo $$(tput setaf 55))
+PURPLE        :=$(shell TERM="$(TERM)" echo $$(tput setaf 92))
+PURPLE_LT     :=$(shell TERM="$(TERM)" echo $$(tput setaf 163))
+GRAY          :=$(shell TERM="$(TERM)" echo $$(tput setaf 153))
+GRAYLT        :=$(shell TERM="$(TERM)" echo $$(tput setaf 231))
+REGULAR       :=$(shell TERM="$(TERM)" echo $$(tput setaf 7))
+RESET         :=$(shell TERM="$(TERM)" echo $$(tput sgr0))
+BOLD          :=$(shell TERM="$(TERM)" echo $$(tput bold))
+UNDERLINE     :=$(shell TERM="$(TERM)" echo $$(tput smul))
+REV           :=$(shell TERM="$(TERM)" echo $$(tput rev))
+DIM           :=$(shell TERM="$(TERM)" echo $$(tput dim))
+endif
+endif
+
+# =============================================================================
+# MAKEFILE CONFIG
+# =============================================================================
+
+1?=
+2?=
+3?=
+4?=
+5?=
+6?=
+7?=
+COMMA:=,
+BOLD=
+NULL:=
+SPACE:=$(NULL) $(NULL)
+define EOL
+$(if 1,
+,)
+endef
+
+SHELL:=bash
+.SHELLFLAGS:=-euo pipefail -c
+MAKEFLAGS+=--warn-undefined-variables
+MAKEFLAGS+=--no-builtin-rules
+
+fmt_input =$(if $($1),$(CYAN)$($1),$(RED)$1 missing)$(RESET)
+fmt_var   =$(if $($1),$(BLUE)$($1),$(RED)$1 missing)$(RESET)
+fmt_output=$(if $($1),$(GREEN)$($1),$(RED)$1 missing)$(RESET)
+fmt_path  =$(CYAN)$1$(RESET)
+fmt_error =$(RED)!!! $1$(RESET)
+fmt_tip   =$(SPACE)👉   $1$(RESET)
+fmt_rule  = ┄―→ $(CYAN)$@: $(BLUE)$1$(RESET)
+fmt_action= ┄┄┄ $(CYAN)|$(RESET) $1$(RESET)
+fmt_result=$(GREEN)←―― $(CYAN)|$(RESET) $1$(RESET)
 
 # --
 # We ensure that the `REQUIRES_BIN` list of tools is available on the system,
@@ -12,7 +134,6 @@ $(error FTL Some required tools are missing)
 endif
 
 ZBAQ_MAKEFILE=$(shell readlink -f $(lastword $(MAKEFILE_LIST)))
-ZBAQ_PATH?=$(shell readlink -f $(dir $(lastword $(MAKEFILE_LIST))))
 ZBAQ_NAME?=$(firstword $(subst .,$(SPACE),$(notdir $(ZBAQ_PATH))))
 
 # --
@@ -27,137 +148,155 @@ ZBAQ_BATCH_SIZE?=100000
 # at will.
 ZBAQ_INDEX_PATH?=$(ZBAQ_PATH)/index.zpaq
 ZBAQ_CONTENT_PATH?=$(ZBAQ_PATH)/content-???.zpaq
-ZBAQ_CONFIG_PATH?=$(ZBAQ_PATH)/config.mk
 ZBAQ_MANIFEST_PATH?=$(ZBAQ_PATH)/manifest.lst
 
 # --
 # ## Ignored files
 #
-# You probably don't want to backup everything, and the `DEFAULT_IGNORED`
+# You probably don't want to backup everything, and the `DEFAULT_EXCLUDE`
 # list of globs will make sure the directories or files matching these
 # are going to e skipped.
 GITIGNORE_PATH?=$(HOME)/.gitignore
 GITIGNORE_PATTERNS?=$(filter %,$(filter-out #%,$(file <$(GITIGNORE_PATH))))
 
 # --
-# The `DEFAULT_IGNORED` are patterns that are ignored by default, which can
+# The `DEFAULT_EXCLUDE` are patterns that are ignored by default, which can
 # be overriden in the config.
-DEFAULT_IGNORED?=*.zbaq *.zpaq
+DEFAULT_EXCLUDE?=*.zbaq *.zpaq node_modules build dist cache
 
 TMPDIR?=$(if $(HOME),$(HOME),/tmp)
 
 # --
-# The `IGNORED` variable contains the list of all ignored patterns. This will
+# The `EXCLUDE` variable contains the list of all ignored patterns. This will
 # be used to define the arguments to
-IGNORED+=$(foreach P,$(GITIGNORE_PATTERNS) $(DEFAULT_IGNORED),$P)
+BACKUP_EXCLUDE+=$(foreach P,$(GITIGNORE_PATTERNS) $(DEFAULT_EXCLUDE),$P)
 
+ZPAQ?=
 # --
 # We make sure that `zpaq` is available
 ifeq ($(ZPAQ),)
 ZPAQ:=$(shell which zpaq 2> /dev/null)
 ifeq ($(ZPAQ),)
-$(error ERR Can't find 'zpaq' command, install it or set the ZPAQ variable)
+$(error $(RED)ERR Can't find 'zpaq' command, install it or set the ZPAQ variable$(RESET))
 endif
 else
 ifeq ($(shell which zpaq 2> /dev/null),)
-$(error ERR Can't find zpaq at '$(ZPAQ)' install it or set the ZPAQ variable)
+$(error $(RED)ERR Can't find zpaq at '$(ZPAQ)' install it or set the ZPAQ variable$(RESET))
 endif
 endif
 
 
 # --
-#  The `config.mk` file is where the confige
+#  The `config.mk` file is where the confiuration is
 
-ifneq ($(wildcard $(ZBAQ_CONFIG_PATH)),)
-include $(ZBAQ_PATH)/config.mk
-else
-$(error ERR Can't find $(ZBAQ_CONFIG_PATH))
+# Otherwise it will be the parent directory of the makefile
+ZBAQ_PATH?=$(shell readlink -f $(dir $(firstword $(MAKEFILE_LIST))))/zbaq
+
+ifeq ($(BACKUP_PATHS),)
+$(error ERR BACKUP_PATHS variable is empty)
 endif
 
 # --
 # We convert ignored patterns into `find` arguments
-FIND_IGNORED:=$(foreach P,$(IGNORED),-a -not -path '*/$P/*')
+FIND_EXCLUDE:=$(foreach P,$(BACKUP_EXCLUDE),-a -not -path '*/$P/*')
 
 # FROM: <https://stackoverflow.com/questions/12340846/bash-shell-script-to-find-the-closest-parent-directory-of-several-files>
 cmd-common-path=printf "%s\n%s\n" $1 | sed -e 'N;s/^\(.*\).*\n\1.*$$/\1/'  | sed 's/\(.*\)\/.*/\1/'
 cmd-make=make -f $$(realpath --relative-to=$$(pwd) $(ZBAQ_MAKEFILE)) $1
 
-BACKUP_SOURCES:=$(shell echo $(foreach P,$(PATHS),$$(readlink -f $P)))
+BACKUP_SOURCES:=$(shell echo $(foreach P,$(BACKUP_PATHS),$$(readlink -f $P)))
 BACKUP_ROOT:=$(if $(filter 1,$(words $(BACKUP_SOURCES))),$(BACKUP_SOURCES),$(shell $(call cmd-common-path,$(BACKUP_SOURCES))))
 ifeq ($(BACKUP_ROOT),)
 	$(error ERR !!! Missing BACKUP_SOURCES in config.mk)
 endif
 
-REMOTE_PROTOCOL:=$(if $(findstring ://,$(REMOTE_URL)),$(firstword $(subst ://,$(SPACE),$(REMOTE_URL))),file)
-REMOTE_PATH:=$(if $(findstring ://,$(REMOVE_ULR)),$(subst $(REMOTE_PROTOCOL)://,,$(REMOTE_URL)),$(REMOTE_URL))
+BACKUP_DESTINATION_PROTOCOL:=$(if $(findstring ://,$(BACKUP_DESTINATION)),$(firstword $(subst ://,$(SPACE),$(BACKUP_DESTINATION))),file)
+BACKUP_DESTINATION_PATH:=$(if $(findstring ://,$(BACKUP_DESTINATION)),$(subst $(BACKUP_DESTINATION_PROTOCOL)://,,$(BACKUP_DESTINATION)),$(BACKUP_DESTINATION))
 
 .PHONY: help
 help:
 	@
-	echo ' ______     ______     ______     ______    '
-	echo '/\___  \   /\  == \   /\  __ \   /\  __ \   '
-	echo '\/_/  /__  \ \  __<   \ \  __ \  \ \ \/\_\  '
-	echo '  /\_____\  \ \_____\  \ \_\ \_\  \ \___\_\ '
-	echo '  \/_____/   \/_____/   \/_/\/_/   \/___/_/ '
-	echo
-	echo "Zbaq is an incremental local or remote backup tool that uses 'zpaq' and 'make'"
-	echo "to easily and seamlessly backup your data"
-	echo
-	echo "Backing up '$(BACKUP_SOURCES)' to '$(REMOTE_URL)'"
-	echo ''
-	echo 'Basic operations:'
-	echo '- zbaq backup:   Back ups new files'
-	echo '- zbaq list:     List previous backups'
-	echo '- zbaq edit:     Opens $$EDITOR to edit the config'
-	echo ''
-	echo 'Checking status:'
-	echo '- zbaq info:     Show information about the config'
-	echo '- zbaq manifest: Shows what has been backed up'
-	echo '- zbaq list:     List previous backups'
-	echo ''
-	echo 'Managing local/remote storage'
-	echo '- zbaq local:    List locally stored backups'
-	echo '- zbaq remote:   List remotely stored backups'
-	echo '- zbaq flush:    Moves local backups to the remote store'
+	cat <<EOF
+	|    ______     ______     ______     ______
+	|   /\___  \   /\  == \   /\  __ \   /\  __ \\
+	|   \/_/  /__  \ \  __<   \ \  __ \  \ \ \/\_\\
+	|     /\_____\  \ \_____\  \ \_\ \_\  \ \___\_\\
+	|     \/_____/   \/_____/   \/_/\/_/   \/___/_/
+	|
+	| Zbaq is an incremental local or remote backup tool that uses 'zpaq' and 'make'
+	| to easily and seamlessly backup your data
+	|
+	| Backing up '$(BACKUP_SOURCES)' to '$(BACKUP_DESTINATION)'
+	|
+	| Basic operations:
+	| - zbaq backup:   Backups new files
+	| - zbaq list:     List previous backups
+	| - zbaq edit:     Opens $$EDITOR to edit the config
+	|
+	| Checking status:
+	| - zbaq info:     Show information about the config
+	| - zbaq manifest: Shows what has been backed up
+	| - zbaq list:     List previous backups
+	|
+	| Managing local/remote storage
+	| - zbaq local:    List locally stored backups
+	| - zbaq remote:   List remotely stored backups
+	| - zbaq flush:    Moves local backups to the remote store
+	|
+	| Configuration:
+	| - BACKUP_ROOT=$(call fmt_input,BACKUP_ROOT)
+	| - BACKUP_PATHS=$(call fmt_input,BACKUP_PATHS)
+	| - BACKUP_DESTINATION=$(call fmt_input,BACKUP_DESTINATION)
+	| - BACKUP_EXCLUDED=$(call fmt_input,BACKUP_EXCLUDE)
+	|
+	| Zbaq:
+	| - ZBAQ_PATH=$(call fmt_var,ZBAQ_PATH)
+	| - ZBAQ_MANIFEST_PATH=$(call fmt_var,ZBAQ_MANIFEST_PATH,run '$(call cmd-make,manifest)')
+	EOF
 
 # --
 # `make info` displays overall information about the
 .PHONY: info
 info:
 	@
-	echo "ZPaq:     $(ZPAQ)"
-	echo "Package:  $(ZBAQ_PATH)"
-	echo "Root:     $(BACKUP_ROOT)"
-	echo "Remote:   $(REMOTE_URL)"
-	echo "Sources:  $(BACKUP_SOURCES)"
-	echo "Ignored:  $(foreach P,$(IGNORED),$P)"
-	if [ -e "$(ZBAQ_MANIFEST_PATH)" ]; then
-		echo "Manifest: $(ZBAQ_MANIFEST_PATH) $$(wc -l "$(ZBAQ_MANIFEST_PATH)")"
-	else
-		echo "Manifest: ??? → run '$(call cmd-make,manifest)' to produce it"
-	fi
-	echo "Content:  $(ZBAQ_CONTENT_PATH) → $(wildcard $(ZBAQ_CONTENT_PATH))"
+	cat <<EOF
+	» ZBaq Information
+	|
+	» Configuration:
+	| - $(BOLD)BACKUP_ROOT$(RESET):        $(call fmt_input,BACKUP_ROOT)
+	| - $(BOLD)BACKUP_PATHS$(RESET):       $(call fmt_input,BACKUP_PATHS)
+	| - $(BOLD)BACKUP_DESTINATION$(RESET): $(call fmt_input,BACKUP_DESTINATION)
+	| - $(BOLD)BACKUP_SOURCES$(RESET):     $(call fmt_input,BACKUP_SOURCES)
+	| - $(BOLD)BACKUP_EXCLUDE$(RESET):     $(call fmt_input,BACKUP_EXCLUDE)
+	|
+	» Backup Working Directory:
+	| - $(BOLD)ZPAQ$(RESET):               $(call fmt_var,ZPAQ)
+	| - $(BOLD)ZBAQ_PATH$(RESET):          $(call fmt_var,ZBAQ_PATH)
+	| - $(BOLD)ZBAQ_MANIFEST_PATH$(RESET): $(call fmt_var,ZBAQ_MANIFEST_PATH,run '$(call cmd-make,manifest)')
+	EOF
 
+# FIXME: Not sure this still stands
 .PHONY: edit
 edit:
+	@echo "$(call fmt_rule,Editing using $(call fmt_var,EDITOR) at $(call fmt_var,ZBAQ_PATH))"
 	env -C "$(ZBAQ_PATH)" $(if $(EDITOR),$(EDITOR),vi) $(realpath $(ZBAQ_PATH)/Makefile)
 
 .PHONY: manifest
 manifest: $(ZBAQ_MANIFEST_PATH)
-	@cat $<
+	@echo "$(call fmt_rule,Manifest at: $(call fmt_path,$(ZBAQ_MANIFEST_PATH)))"
+	cat "$<"
+	echo "$(call fmt_result,$$(wc -l "$<" | cut -d' ' -f1) lines)"
 
 .PHONY: clean-manifest
 clean-manifest: .FORCE
-	@
-	# We clean any previously created manifest file
-	# FROM: <https://stackoverflow.com/questions/6363441/check-if-a-file-exists-with-a-wildcard-in-a-shell-script>
-	if [ ! -z "$$(find "$(ZBAQ_PATH)" -maxdepth 1 -name 'manifest-*.lst' -printf 1 -quit)" ]; then
-		rm $(ZBAQ_PATH)/manifest-*.lst
+	@echo "$(call fmt_rule,Cleaning up manifest files in $(call fmt_var,ZBAQ_PATH))"
+	if [ -e "$(ZBAQ_PATH)" ]; then
+		find "$(ZBAQ_PATH)" -name 'manifest-*.lst' -exec unlink {} ';'
 	fi
 
 .PHONY: backup
 backup: $(ZBAQ_PATH)/manifest.lst
-	@
+	@echo "$(call fmt_rule,Running backup using manifest: $(GREEN)$<)"
 	if [ ! -d "$(BACKUP_ROOT)" ]; then
 		echo "ERR Could not find root directory: $(BACKUP_ROOT)"
 	fi
@@ -196,7 +335,7 @@ backup: $(ZBAQ_PATH)/manifest.lst
 
 .PHONY: list
 list:
-	@
+	@echo "$(call fmt_rule,Listing the backed up files: $(call fmt_var,ZBAQ_INDEX_PATH))"
 	if [ ! -e "$(ZBAQ_INDEX_PATH)" ]; then
 		echo "No backup currently existing → run '$(call cmd-make,backup)' to produce it"
 	else
@@ -205,18 +344,19 @@ list:
 
 .PHONY: local
 local:
-	@du -hsc $(ZBAQ_PATH)/*
+	@echo "$(call fmt_rule,Local size of backup index: $(call fmt_var,ZBAQ_PATH))"
+	du -hsc $(ZBAQ_PATH)/*
 
 
 .PHONY: remote
 remote: check-remote
 	@
-	case "$(REMOTE_PROTOCOL)" in
+	case "$(BACKUP_DESTINATION_PROTOCOL)" in
 		file)
-			if [ -z "$$(ls $(REMOTE_PATH)/$(notdir $(ZBAQ_CONTENT_PATH)) 2> /dev/null)" ]; then
-				echo "No archive found at remote path: '$(REMOTE_PATH)'"
+			if [ -z "$$(ls $(BACKUP_DESTINATION_PATH)/$(notdir $(ZBAQ_CONTENT_PATH)) 2> /dev/null)" ]; then
+				echo "No archive found at remote path: '$(BACKUP_DESTINATION_PATH)'"
 			else
-				du -hsc "$(REMOTE_PATH)/$(notdir $(ZBAQ_CONTENT_PATH))"
+				du -hsc "$(BACKUP_DESTINATION_PATH)/$(notdir $(ZBAQ_CONTENT_PATH))"
 			fi
 		;;
 		*)
@@ -226,15 +366,15 @@ remote: check-remote
 .PHONY: check-remote
 check-remote:
 	@
-	case "$(REMOTE_PROTOCOL)" in
+	case "$(BACKUP_DESTINATION_PROTOCOL)" in
 		file)
-			if [ ! -d "$(REMOTE_PATH)" ]; then
-				echo "No remote path found $(REMOTE_PATH)"
+			if [ ! -d "$(BACKUP_DESTINATION_PATH)" ]; then
+				echo "No remote path found $(BACKUP_DESTINATION_PATH)"
 				exit 1
 			fi
 			;;
 		*)
-			echo "ERR: Unsupported protocol $(REMOTE_PROTOCOL) in $(REMOTE_URL)"
+			echo "ERR: Unsupported protocol $(BACKUP_DESTINATION_PROTOCOL) in $(BACKUP_DESTINATION_URL)"
 			exit 1
 			;;
 	esac
@@ -243,26 +383,26 @@ check-remote:
 .PHONY: flush
 flush: check-remote
 	@
-	case "$(REMOTE_PROTOCOL)" in
+	case "$(BACKUP_DESTINATION_PROTOCOL)" in
 		file)
-			if [ ! -d "$(REMOTE_PATH)" ]; then
-				if ! mkdir -p "$(REMOTE_PATH)"; then
-					echo "ERR: Could not create $(REMOTE_PATH) in $(REMOTE_URL)"
+			if [ ! -d "$(BACKUP_DESTINATION_PATH)" ]; then
+				if ! mkdir -p "$(BACKUP_DESTINATION_PATH)"; then
+					echo "ERR: Could not create $(BACKUP_DESTINATION_PATH) in $(BACKUP_DESTINATION_URL)"
 					exit 1
 				fi
 			fi
 			;;
 		*)
-			echo "ERR: Unsupported protocol $(REMOTE_PROTOCOL) in $(REMOTE_URL)"
+			echo "ERR: Unsupported protocol $(BACKUP_DESTINATION_PROTOCOL) in $(BACKUP_DESTINATION_URL)"
 			exit 1
 			;;
 	esac
 
 	for CONTENT in $(ZBAQ_CONTENT_PATH); do
 		CONTENT_NAME=$$(basename "$$CONTENT")
-		case "$(REMOTE_PROTOCOL)" in
+		case "$(BACKUP_DESTINATION_PROTOCOL)" in
 			file)
-				TARGET="$(REMOTE_PATH)/$$CONTENT_NAME"
+				TARGET="$(BACKUP_DESTINATION_PATH)/$$CONTENT_NAME"
 				if [ -e "$$TARGET" ]; then
 					echo "ERR: An archive already exists at "$$TARGET", aborting."
 					exit 1
@@ -278,7 +418,8 @@ flush: check-remote
 # ## Internal Functions
 
 $(ZBAQ_MANIFEST_PATH): clean-manifest .FORCE
-	@
+	@echo "$(call fmt_result,Updating the manifest file)"
+	mkdir -p "$(dir $@)"
 	# We create catalogue of all the files we need to manage using `fd`
 	truncate --size 0 "$@"
 
@@ -288,11 +429,14 @@ $(ZBAQ_MANIFEST_PATH): clean-manifest .FORCE
 	fi
 	for SRC in $(BACKUP_SOURCES); do
 		if [ ! -e "$$SRC" ]; then
-			echo "WRN -!- Source does not exist: $$SRC"
+			echo "WRN -!- Source does not exist: $(call fmt_path,$$SRC)"
 		else
-			env -C "$(BACKUP_ROOT)" find "$$SRC" '(' -type f -or -type l ')' $(FIND_IGNORED) -exec realpath --relative-base="$(BACKUP_ROOT)" '{}' ';' >> "$@"
+			echo "$(call fmt_action,Adding files in $(call fmt_path,$$SRC) to manifest…)"
+			env -C "$(BACKUP_ROOT)" find "$$SRC" '(' -type f -or -type l ')' $(FIND_EXCLUDE) -exec realpath --relative-base="$(BACKUP_ROOT)" '{}' ';' >> "$@"
+			echo "$(call fmt_action,→ $$(wc -l "$@" | cut -d' ' -f1) lines)"
 		fi
 	done
+	echo "$(call fmt_result,$$(wc -l "$@" | cut -d' ' -f1) lines)"
 
 # --
 # ## Make functions
